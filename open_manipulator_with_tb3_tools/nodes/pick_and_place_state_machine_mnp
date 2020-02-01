@@ -1,0 +1,476 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+################################################################################
+# Copyright 2018 ROBOTIS CO., LTD.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+# Authors: Leon Jung, [AuTURBO] Kihoon Kim (https://github.com/auturbo), Gilbert
+
+import rospy, roslaunch
+import numpy as np
+import subprocess
+import os
+import sys
+from enum import Enum
+from std_msgs.msg import UInt8
+
+from math import pow, atan2, sqrt
+from tf.transformations import *
+import tf
+
+import threading
+
+# Navigation
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal, MoveBaseActionResult
+from actionlib_msgs.msg import GoalStatusArray
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
+
+# Manipulator 
+from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import PoseArray
+from open_manipulator_msgs.msg import JointPosition
+from open_manipulator_msgs.msg import KinematicsPose
+from open_manipulator_msgs.srv import SetJointPosition
+from open_manipulator_msgs.srv import SetKinematicsPose
+from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped
+
+from move_base_msgs.msg import MoveBaseActionResult
+
+# AR Markers
+from ar_track_alvar_msgs.msg import AlvarMarker
+from ar_track_alvar_msgs.msg import AlvarMarkers
+import enum
+from tf.transformations import *
+
+class State(enum.Enum):
+    START = 0
+    OBJECT_DETECT = 1
+    SELECT_MARKER = 2     
+    GO_OBJECT = 3
+    CLOSE_OBJECT = 4
+    PICK_OBJECT = 5
+    GO_BOX = 6
+    CLOSE_BOX = 7
+    PLACE_OBJECT = 8    
+    FINISH = 10
+  
+class CoreNodeController():
+    def __init__(self):
+
+        self.namespace = rospy.get_param("~robot_name")
+        self.planning_group = rospy.get_param("~planning_group")
+        self.marker_pose_sub = rospy.Subscriber(self.namespace + '/ar_pose_marker', AlvarMarkers, self.arMarkerMsgCallback)
+        self.sub_goal_status = rospy.Subscriber(self.namespace + '/move_base/status', GoalStatusArray, self.goalStatusMsgCallback)
+        self.sub_goal_result = rospy.Subscriber(self.namespace + '/move_base/result', MoveBaseActionResult, self.goalResultMsgCallback)
+
+        self.pub_goal_pose_stamped = rospy.Publisher(self.namespace + '/move_base_simple/goal', PoseStamped, queue_size=1)
+        self.set_joint_position_by_moveit = rospy.ServiceProxy(self.planning_group + '/moveit/set_joint_position', SetJointPosition)
+        self.set_kinematics_by_moveit = rospy.ServiceProxy(self.planning_group + '/moveit/set_kinematics_pose', SetKinematicsPose)
+        self.set_gripper_control = rospy.ServiceProxy(self.namespace + '/gripper', SetJointPosition)
+        self.moving= False;  
+        self.gofinish = False;
+
+        self.odom_sub = rospy.Subscriber(self.namespace + '/odom', Odometry, self.odomMsgCallback)
+        self.cmd_vel_pub = rospy.Publisher(self.namespace + '/cmd_vel', Twist, queue_size=10)
+        self.tb3_odom = Odometry()
+        self.cmd_vel = Twist()   
+        self.listener = tf.TransformListener()
+
+        #self.set_kinematics_position_by_moveit = rospy.ServiceProxy('/open_manipulator/goal_task_space_path_position_only', SetKinematicsPose)
+        self.poseArray  = [PoseStamped() for i in range(10)]
+        self.poseArrayToTF  = [PoseStamped() for i in range(10)]
+
+        self.end_effector_name = "gripper"
+        self.finishMarkerNum = []
+        self.curMarkerNum = 0
+
+        self.curState= State.START;  
+        #self.curState= State.GO_BOX
+        self.is_triggered = False
+        #self.is_triggered = True
+        rospy.sleep(3)
+        loop_rate = rospy.Rate(10) # 10hz
+        while not rospy.is_shutdown():
+            if self.is_triggered == True:
+                self.fnControlNode()            
+            loop_rate.sleep()
+
+    def odomMsgCallback(self, odom_msg):       
+        self.tb3_odom = odom_msg  
+
+    def fnControlNode(self):
+        #rospy.loginfo("fnControlNode")
+        if self.curState == State.START :
+            self.curState = State.OBJECT_DETECT
+        elif self.curState== State.OBJECT_DETECT :
+            self.objectDetect()  
+        elif self.curState== State.GO_OBJECT :
+            self.goObject()  
+        elif self.curState== State.CLOSE_OBJECT :
+            self.closeObject()        
+        elif self.curState== State.PICK_OBJECT :
+            self.pickObject() 
+        elif self.curState== State.GO_BOX :
+            self.goBox()        
+        elif self.curState== State.CLOSE_BOX :
+            self.closeBox() 
+        elif self.curState== State.PLACE_OBJECT :
+            self.placeObject()  
+        elif self.curState== State.FINISH :
+            self.finish()         
+
+    def finish(self):
+        rospy.loginfo('finish')
+
+    def objectDetect(self):
+        rospy.loginfo('goObject')
+        for i in range(0, 3): 
+            if self.poseArray[i].pose.position.x != 0 or self.poseArray[i].pose.position.y != 0 or self.poseArray[i].pose.position.z != 0 and not( i in self.finishMarkerNum ):
+                #self.finishMarkerNum.append(i)
+                self.curMarkernum = i      
+                rospy.loginfo('robot picking marker %d object', i)
+                self.curState = State.GO_OBJECT
+                break
+
+    def goalResultMsgCallback(self, msg):
+        rospy.loginfo('goalResultMsgCallback %d, %s', msg.status.status, msg.status.text)  
+        if msg.status.status == 3 :           
+            self.gofinish = True 
+
+    def goalStatusMsgCallback(self, msg):
+        #rospy.loginfo('goalStatusMsgCallback ')
+        pass 
+
+    def arMarkerMsgCallback(self, ar_marker_pose_msg):
+        for i, marker in enumerate(ar_marker_pose_msg.markers):
+            self.poseArray[marker.id].pose = marker.pose.pose
+            #self.poseArray[marker.id].header.stamp = rospy.Time.now()
+            self.poseArray[marker.id].header.stamp = rospy.get_rostime()
+            try:
+                (trans,rot) = self.listener.lookupTransform(self.namespace+'/base_link', 'ar_marker_'+ str(marker.id) , rospy.Time(0))
+                self.poseArrayToTF[marker.id].pose.position.x = trans[0]
+                self.poseArrayToTF[marker.id].pose.position.y = trans[1]
+                self.poseArrayToTF[marker.id].pose.position.z = trans[2]
+                #self.poseArrayToTF[marker.id].header.stamp = rospy.Time.now()
+                self.poseArrayToTF[marker.id].header.stamp = rospy.get_rostime()
+            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                rospy.logwarn('there is no tf ')
+            #rospy.loginfo('marker_id %d , marker_pose tf %.2f, %.2f, %.2f', i,self.poseArrayToTF[marker.id].pose.position.x , \
+            #    self.poseArrayToTF[marker.id].pose.position.y, self.poseArrayToTF[marker.id].pose.position.z)                
+            #rospy.loginfo('marker_id %d , marker_pose %.2f, %.2f, %.2f', i,self.poseArray[marker.id].pose.position.x , \
+            #    self.poseArray[marker.id].pose.position.y, self.poseArray[marker.id].pose.position.z)
+        self.is_triggered = True
+
+    def goObject(self):
+        if self.gofinish and self.moving:
+            self.gofinish = False
+            self.moving = False
+            self.curState = State.CLOSE_OBJECT
+        elif not self.gofinish and self.moving:
+            rospy.loginfo('moving now')    
+        elif not self.gofinish and not self.moving:
+            rospy.loginfo('goObject %d , ( %.2f, %.2f, %.2f)', self.curMarkerNum, \
+                self.poseArray[self.curMarkerNum].pose.position.x, self.poseArray[self.curMarkerNum].pose.position.y, \
+                    self.poseArray[self.curMarkerNum].pose.position.z )
+            goalPoseStamped = PoseStamped()
+            goalPoseStamped.pose.position.x = self.poseArray[self.curMarkerNum].pose.position.x - 0.39 
+            goalPoseStamped.pose.position.y = self.poseArray[self.curMarkerNum].pose.position.y
+            goalPoseStamped.pose.position.z = 0
+
+            goalPoseStamped.pose.orientation.x = 0.0
+            goalPoseStamped.pose.orientation.y = 0.0
+            goalPoseStamped.pose.orientation.z = 0.0
+            goalPoseStamped.pose.orientation.w = 1.0   
+            self.fnPubGoalPose(goalPoseStamped)
+        else :
+            rospy.loginfo('????????????????????????????????????') 
+
+    def closeObject(self):
+        rospy.loginfo('test %d ',self.curMarkerNum) 
+
+        rospy.loginfo('closeObject')
+        while not rospy.is_shutdown():
+            rospy.loginfo('goObject %d',self.curMarkerNum)
+            rospy.loginfo('ar_marker id %d  pose( %.2f, %.2f, %.2f)  tf_pose from base link( %.2f, %.2f, %.2f)',self.curMarkerNum,\
+                           self.poseArray[self.curMarkerNum].pose.position.x, self.poseArray[self.curMarkerNum].pose.position.y, self.poseArray[self.curMarkerNum].pose.position.z,\
+                           self.poseArrayToTF[self.curMarkerNum].pose.position.x, self.poseArrayToTF[self.curMarkerNum].pose.position.y, self.poseArrayToTF[self.curMarkerNum].pose.position.z )
+            #rospy.sleep(0.3)     
+            distance = self.poseArray[self.curMarkerNum].pose.position.x
+            dircetion = self.poseArray[self.curMarkerNum].pose.position.y
+
+            cmd_vel = Twist()
+            self.cmd_vel.angular.z = 0
+            self.cmd_vel.linear.x  = 0
+            direction_center = 0.00
+            direction_range = 0.01
+            distance_min = 0.22 # If the robot is closer than 20 cm from the object, the marker is not visible.
+            distance_range = 0.05 # 10 cm 
+            if dircetion > direction_center + direction_range :
+                rospy.loginfo('turn letf')
+                self.cmd_vel.angular.z = 0.05
+            elif dircetion < direction_center -direction_range :
+                rospy.loginfo('turn right')   
+                self.cmd_vel.angular.z = -0.05     
+            elif dircetion < 0.05 :
+                rospy.loginfo('no turn')    
+
+            if distance > distance_range :      
+                self.cmd_vel.linear.x = 0.03
+                rospy.loginfo('forward')
+
+            detect_duration = rospy.get_rostime().to_sec() - self.poseArray[self.curMarkerNum].header.stamp.to_sec() 
+            rospy.loginfo('detect duration time  %.2f', detect_duration )
+            if detect_duration > 0.5:
+                self.cmd_vel.linear.x  = -0.01
+                rospy.loginfo('back')               
+
+            if distance <= distance_min and ( abs(dircetion - direction_center) < direction_range ) and detect_duration < 0.5:
+                self.cmd_vel.angular.z = 0
+                self.cmd_vel.linear.x  = 0.02
+                self.cmd_vel_pub.publish(self.cmd_vel) 
+                rospy.sleep(3) 
+                self.cmd_vel.angular.z = 0
+                self.cmd_vel.linear.x  = 0
+                self.cmd_vel_pub.publish(self.cmd_vel) 
+                break
+            self.cmd_vel_pub.publish(self.cmd_vel)   
+        self.curState = State.PICK_OBJECT         
+
+    def pickObject(self):   
+        rospy.loginfo('pickObject')
+        object_pose = Pose()
+
+        #open gripper 
+        self.openGripper()
+        rospy.sleep(1) 
+        #go object
+        '''object_pose.position.x  = 0.15
+        object_pose.position.y  = 0.0
+        object_pose.position.z  = 0.22
+        object_pose.orientation.w = 1
+        object_pose.orientation.x = 0.0
+        object_pose.orientation.y = 0.0
+        object_pose.orientation.z = 0.0
+        self.setArmKinematics(object_pose)'''
+        rospy.sleep(3)         
+        #close object
+        object_pose.position.x  = 0.225
+        object_pose.position.y  = 0.0
+        object_pose.position.z  = 0.22 + 0.03
+        object_pose.orientation.w = 1
+        object_pose.orientation.x = 0.0
+        object_pose.orientation.y = 0.0
+        object_pose.orientation.z = 0.0
+        self.setArmKinematics(object_pose)
+        rospy.sleep(5)          
+        #gripper close 
+        self.closeGripper()
+        rospy.sleep(1) 
+        #close robot
+        joint = JointPosition()
+        joint.position = [0.0, -1.5707, 1.37, -0.20]
+        self.setArmJoint(joint)
+        rospy.sleep(3) 
+        self.curState = State.GO_BOX
+        self.gofinish = False
+        self.moving = False        
+
+    def openGripper(self):
+        rospy.logwarn("openGripper")
+        joint = JointPosition()
+        joint.position = [0.15]
+        joint.max_velocity_scaling_factor = 1.0
+        joint.max_accelerations_scaling_factor = 1.0
+        path_time = 1
+        try:
+            resp1 = self.set_gripper_control(self.planning_group,joint, path_time)
+            print 'resp1 {}'.format(resp1.is_planned) 
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e        
+
+    def closeGripper(self):
+        rospy.logwarn("openGripper")
+        joint = JointPosition()
+        joint.position = [0]
+        joint.max_velocity_scaling_factor = 1.0
+        joint.max_accelerations_scaling_factor = 1.0
+        path_time = 1
+        try:
+            resp1 = self.set_gripper_control(self.planning_group,joint, path_time)
+            print 'resp1 {}'.format(resp1.is_planned) 
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e     
+
+    def goBox(self):
+        if self.gofinish and self.moving:
+            self.gofinish = False
+            self.moving = False
+            self.curState = State.CLOSE_BOX
+        elif not self.gofinish and self.moving:
+            rospy.loginfo('moving now')    
+        elif not self.gofinish and not self.moving:
+            #rospy.loginfo('goBox %d , ( %.2f, %.2f, %.2f)', self.curMarkerNum, \
+            #    self.poseArray[self.curMarkerNum].pose.position.x, self.poseArray[self.curMarkerNum].pose.position.y, self.poseArray[self.curMarkerNum].pose.position.z )
+            goalPoseStamped = PoseStamped()
+            goalPoseStamped.pose.position.x = 0.86322930159568787
+            goalPoseStamped.pose.position.y = 0.498379111289978
+            goalPoseStamped.pose.position.z = 0
+
+            q_orig = quaternion_from_euler(-1.57, 0, 0)
+            q_rot = quaternion_from_euler(3.14159, 0, 0)
+            q_new = quaternion_multiply(q_rot, q_orig)
+            #print q_new
+            goalPoseStamped.pose.orientation.w = q_new[0]
+            goalPoseStamped.pose.orientation.x = q_new[1]
+            goalPoseStamped.pose.orientation.y = q_new[2]
+            goalPoseStamped.pose.orientation.z = q_new[3]
+            
+            self.fnPubGoalPose(goalPoseStamped)
+            rospy.loginfo('send goal')
+        else :
+            rospy.loginfo('????????????????????????????????????') 
+
+    def closeBox(self):   
+        rospy.loginfo('closeBox')
+        if self.curMarkerNum == 0:
+            self.curMarkerNum = 4
+        rospy.loginfo('test %d ',self.curMarkerNum) 
+        while not rospy.is_shutdown():
+            rospy.loginfo('ar_marker id %d  pose( %.2f, %.2f, %.2f)  tf_pose from base link( %.2f, %.2f, %.2f)',self.curMarkerNum,\
+                           self.poseArray[self.curMarkerNum].pose.position.x, self.poseArray[self.curMarkerNum].pose.position.y, self.poseArray[self.curMarkerNum].pose.position.z,\
+                           self.poseArrayToTF[self.curMarkerNum].pose.position.x, self.poseArrayToTF[self.curMarkerNum].pose.position.y, self.poseArrayToTF[self.curMarkerNum].pose.position.z )
+            #rospy.sleep(0.3)     
+            distance = self.poseArray[self.curMarkerNum].pose.position.x
+            dircetion = self.poseArray[self.curMarkerNum].pose.position.y
+
+            cmd_vel = Twist()
+            self.cmd_vel.angular.z = 0
+            self.cmd_vel.linear.x  = 0
+            direction_center = 0.01
+            direction_range = 0.01
+            distance_min = 0.22 # If the robot is closer than 20 cm from the object, the marker is not visible.
+            distance_range = 0.05 # 10 cm 
+            if dircetion > direction_center + direction_range :
+                rospy.loginfo('turn letf')
+                self.cmd_vel.angular.z = 0.05
+            elif dircetion < direction_center -direction_range :
+                rospy.loginfo('turn right')   
+                self.cmd_vel.angular.z = -0.05     
+            elif dircetion < 0.05 :
+                rospy.loginfo('no turn')    
+
+            if distance > distance_range : 
+                if distance  > 0.3 :
+                    self.cmd_vel.linear.x = 0.1
+                else :
+                    self.cmd_vel.linear.x = 0.03
+                rospy.loginfo('forward')
+
+            detect_duration = rospy.get_rostime().to_sec() - self.poseArray[self.curMarkerNum].header.stamp.to_sec() 
+            rospy.loginfo('detect duration time  %.2f', detect_duration )
+            if detect_duration > 0.5:
+                self.cmd_vel.linear.x  = -0.01
+                rospy.loginfo('back')               
+
+            if distance <= distance_min and ( abs(dircetion - direction_center) < direction_range ) and detect_duration < 0.5:
+                self.cmd_vel.angular.z = 0
+                self.cmd_vel.linear.x  = 0.02
+                self.cmd_vel_pub.publish(self.cmd_vel) 
+                rospy.sleep(5) 
+                self.cmd_vel.angular.z = 0
+                self.cmd_vel.linear.x  = 0
+                self.cmd_vel_pub.publish(self.cmd_vel) 
+                break
+            self.cmd_vel_pub.publish(self.cmd_vel)   
+        self.curState = State.PLACE_OBJECT            
+
+    def placeObject(self):   
+        rospy.loginfo('pickObject')
+        object_pose = Pose()
+        #go object
+        '''object_pose.position.x  = 0.15
+        object_pose.position.y  = 0.0
+        object_pose.position.z  = 0.22
+        object_pose.orientation.w = 1
+        object_pose.orientation.x = 0.0
+        object_pose.orientation.y = 0.0
+        object_pose.orientation.z = 0.0
+        self.setArmKinematics(object_pose)'''
+        rospy.sleep(3)         
+        #close box
+        object_pose.position.x  = 0.225
+        object_pose.position.y  = 0.0
+        object_pose.position.z  = 0.22
+        object_pose.orientation.w = 1
+        object_pose.orientation.x = 0.0
+        object_pose.orientation.y = 0.0
+        object_pose.orientation.z = 0.0
+        self.setArmKinematics(object_pose)
+        rospy.sleep(5)          
+        #gripper close 
+        self.openGripper()
+        rospy.sleep(1) 
+        #close robot
+        joint = JointPosition()
+        joint.position = [0.0, -1.5707, 1.37, -0.20]
+        self.setArmJoint(joint)
+        rospy.sleep(3) 
+        self.curState = State.FINISH
+        self.gofinish = False
+        self.moving = False      
+
+    def fnPubGoalPose(self, goalPoseStamped ):
+        #rospy.loginfo('send goal')
+        goalPoseStamped.header.frame_id = "map"
+        goalPoseStamped.header.stamp = rospy.Time.now()
+        self.pub_goal_pose_stamped.publish(goalPoseStamped) 
+        self.gofinish = False
+        self.moving = True
+
+    def setArmKinematics(self,object_pose):
+        rospy.logwarn("setArmKinematics")
+        kinematics_pose = KinematicsPose()
+        kinematics_pose.pose = object_pose
+        kinematics_pose.max_velocity_scaling_factor = 1.0
+        kinematics_pose.max_accelerations_scaling_factor = 1.0
+        kinematics_pose.tolerance = 0.01
+        path_time = 1
+
+        try:
+            resp1 = self.set_kinematics_by_moveit( self.planning_group, self.end_effector_name, kinematics_pose, path_time)
+            print 'resp1 {}'.format(resp1.is_planned)             
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e                     
+
+    def setArmJoint(self, joint):
+        rospy.logwarn("setArmJoint")        
+        joint.max_velocity_scaling_factor = 1.0
+        joint.max_accelerations_scaling_factor = 1.0
+        path_time = 1
+        try:
+            resp1 = self.set_joint_position_by_moveit(self.planning_group, joint, path_time)
+            print 'resp1 {}'.format(resp1.is_planned) 
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e    
+
+    def main(self):
+        rospy.spin()
+
+if __name__ == '__main__':
+    rospy.init_node('core_node_controller')
+    node = CoreNodeController()
+    node.main()

@@ -102,9 +102,14 @@ class CoreNodeController():
         self.curMarkerNum = 0
 
         self.curState= State.START;  
-        #self.curState= State.FINISH
+        #self.curState= State.GO_BOX
         self.is_triggered = False
         #self.is_triggered = True
+        #self.finishMarkerNum.append(0)
+        #self.finishMarkerNum.append(1)
+        #self.finishMarkerNum.append(2)
+        #self.finishMarkerNum.append(3)
+
         rospy.sleep(3)
         loop_rate = rospy.Rate(10) # 10hz
         while not rospy.is_shutdown():
@@ -170,7 +175,7 @@ class CoreNodeController():
 
     def objectDetect(self):
         rospy.loginfo('goObject')
-        for i in range(0, 3): 
+        for i in range(0, 4): 
             if self.poseArray[i].pose.position.x != 0 or self.poseArray[i].pose.position.y != 0 or self.poseArray[i].pose.position.z != 0 :
                 #self.finishMarkerNum.append(i)
                 if i in self.finishMarkerNum :
@@ -196,7 +201,7 @@ class CoreNodeController():
             #self.poseArray[marker.id].header.stamp = rospy.Time.now()
             self.poseArray[marker.id].header.stamp = rospy.get_rostime()
             try:
-                (trans,rot) = self.listener.lookupTransform(self.namespace+'/base_link', 'ar_marker_'+ str(marker.id) , rospy.Time(0))
+                (trans,rot) = self.listener.lookupTransform('map', 'ar_marker_'+ str(marker.id) , rospy.Time(0))
                 self.poseArrayToTF[marker.id].pose.position.x = trans[0]
                 self.poseArrayToTF[marker.id].pose.position.y = trans[1]
                 self.poseArrayToTF[marker.id].pose.position.z = trans[2]
@@ -216,8 +221,8 @@ class CoreNodeController():
                 self.poseArray[self.curMarkerNum].pose.position.x, self.poseArray[self.curMarkerNum].pose.position.y, \
                     self.poseArray[self.curMarkerNum].pose.position.z, self.obstacle_ahead_distance)
         goalPoseStamped = PoseStamped()
-        goalPoseStamped.pose.position.x = self.poseArray[self.curMarkerNum].pose.position.x - 0.39
-        goalPoseStamped.pose.position.y = self.poseArray[self.curMarkerNum].pose.position.y
+        goalPoseStamped.pose.position.x = self.poseArrayToTF[self.curMarkerNum].pose.position.x - 0.39
+        goalPoseStamped.pose.position.y = self.poseArrayToTF[self.curMarkerNum].pose.position.y
         goalPoseStamped.pose.position.z = 0
         goalPoseStamped.pose.orientation.x = 0.0
         goalPoseStamped.pose.orientation.y = 0.0
@@ -269,22 +274,21 @@ class CoreNodeController():
                     self.curState = State.PICK_OBJECT 
                     break                
             else :                        
-                if armarker_enable :                
+                if armarker_enable :   
+                    if self.obstacle_ahead_distance > 0.3 :
+                        self.cmd_vel.linear.x = 0.1     
+                    else :
+                        self.cmd_vel.linear.x = 0.03 
                     if dircetion > (direction_center + direction_range) :
-                        rospy.loginfo('turn letf')
-                        self.cmd_vel.linear.x = 0.03  
-                        self.cmd_vel.angular.z = 0.05
-                        self.cmd_vel_pub.publish(self.cmd_vel)
+                        rospy.loginfo('turn letf')                         
+                        self.cmd_vel.angular.z = 0.05                        
                     elif dircetion < (direction_center - direction_range) :
                         rospy.loginfo('turn right')
-                        self.cmd_vel.linear.x = 0.03  
                         self.cmd_vel.angular.z = -0.05
-                        self.cmd_vel_pub.publish(self.cmd_vel)
                     else :
                         rospy.loginfo('forward')
-                        self.cmd_vel.linear.x = 0.03
                         self.cmd_vel.angular.z = 0
-                        self.cmd_vel_pub.publish(self.cmd_vel)            
+                    self.cmd_vel_pub.publish(self.cmd_vel)            
                 else :
                     rospy.loginfo('forward2')
                     self.cmd_vel.linear.x = 0.01  
@@ -344,14 +348,30 @@ class CoreNodeController():
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e     
 
-    def goBox(self):        
+    def goBox(self):    
         rospy.loginfo('goBox')
         goalPoseStamped = PoseStamped()
-        goalPoseStamped.pose.position.x = 0.86322930159568787
-        goalPoseStamped.pose.position.y = 0.498379111289978
-        goalPoseStamped.pose.position.z = 0
-
-        q_orig = quaternion_from_euler(-1.57, 0, 0)
+        if self.curMarkerNum == 0 :            
+            goalPoseStamped.pose.position.x = 0.86322930159568787
+            goalPoseStamped.pose.position.y = 0.498379111289978
+            goalPoseStamped.pose.position.z = 0
+            q_orig = quaternion_from_euler(-1.57, 0, 0)
+        elif self.curMarkerNum == 1 :
+            goalPoseStamped.pose.position.x = 0.86322930159568787
+            goalPoseStamped.pose.position.y = -0.498
+            goalPoseStamped.pose.position.z = 0
+            q_orig = quaternion_from_euler(1.57, 0, 0)
+        elif self.curMarkerNum == 2 :
+            goalPoseStamped.pose.position.x = -1.093
+            goalPoseStamped.pose.position.y = 1.080
+            goalPoseStamped.pose.position.z = 0
+            q_orig = quaternion_from_euler(-2.355, 0, 0)
+        elif self.curMarkerNum == 3 :
+            goalPoseStamped.pose.position.x = -1.133
+            goalPoseStamped.pose.position.y = -1.04
+            goalPoseStamped.pose.position.z = 0   
+            q_orig = quaternion_from_euler(2.355, 0, 0)
+        
         q_rot = quaternion_from_euler(3.14159, 0, 0)
         q_new = quaternion_multiply(q_rot, q_orig)
         #print q_new
@@ -362,60 +382,68 @@ class CoreNodeController():
         self.fnPubGoalPose(goalPoseStamped)
         self.curState = State.CLOSE_BOX
 
-    def closeBox(self):   
-        rospy.loginfo('closeBox')
-        #if self.curMarkerNum == 0:
-        #    self.curMarkerNum = 4
+    def closeBox(self):
+        rospy.loginfo('closeBox %d ',self.curMarkerNum)
         boxMarker = self.curMarkerNum  + 4
-        rospy.loginfo('close Box boxMarker  %d ',boxMarker) 
         while not rospy.is_shutdown():
-            rospy.loginfo('ar_marker id %d  pose( %.2f, %.2f, %.2f)  tf_pose from base link( %.2f, %.2f, %.2f)',boxMarker,\
+            rospy.loginfo('ar_marker id %d  pose( %.2f, %.2f, %.2f)  tf_pose from base link( %.2f, %.2f, %.2f) obstacle_ahead_distance %2f',boxMarker,\
                            self.poseArray[boxMarker].pose.position.x, self.poseArray[boxMarker].pose.position.y, self.poseArray[boxMarker].pose.position.z,\
-                           self.poseArrayToTF[boxMarker].pose.position.x, self.poseArrayToTF[boxMarker].pose.position.y, self.poseArrayToTF[boxMarker].pose.position.z )
+                           self.poseArrayToTF[boxMarker].pose.position.x, self.poseArrayToTF[boxMarker].pose.position.y, \
+                            self.poseArrayToTF[boxMarker].pose.position.z , self.obstacle_ahead_distance)
             #rospy.sleep(0.3)     
             distance = self.poseArray[boxMarker].pose.position.x
             dircetion = self.poseArray[boxMarker].pose.position.y
 
             cmd_vel = Twist()
-            self.cmd_vel.angular.z = 0
-            self.cmd_vel.linear.x  = 0
-            direction_center = 0.01
+            direction_center = 0.00
             direction_range = 0.01
-            distance_min = 0.22 # If the robot is closer than 20 cm from the object, the marker is not visible.
+            distance_min = 0.15 # If the robot is closer than 20 cm from the object, the marker is not visible.
             distance_range = 0.05 # 10 cm 
-            if dircetion > direction_center + direction_range :
-                rospy.loginfo('turn letf')
-                self.cmd_vel.angular.z = 0.05
-            elif dircetion < direction_center -direction_range :
-                rospy.loginfo('turn right')   
-                self.cmd_vel.angular.z = -0.05     
-            elif dircetion < 0.05 :
-                rospy.loginfo('no turn')    
+            armarker_enable = True
+            if  ( rospy.get_rostime().to_sec() - self.poseArray[boxMarker].header.stamp.to_sec()) > 0.5 :
+                armarker_enable = False
 
-            if distance > distance_range : 
-                if distance  > 0.3 :
-                    self.cmd_vel.linear.x = 0.1
+            if self.obstacle_ahead_distance < distance_min :                
+                if armarker_enable :                
+                    if dircetion > (direction_center + direction_range) :
+                        rospy.loginfo('turn letf')
+                        self.cmd_vel.linear.x = 0 
+                        self.cmd_vel.angular.z = 0.05
+                        self.cmd_vel_pub.publish(self.cmd_vel)
+                    if dircetion < (direction_center - direction_range) :
+                        rospy.loginfo('turn right')
+                        self.cmd_vel.linear.x = 0 
+                        self.cmd_vel.angular.z = -0.05
+                        self.cmd_vel_pub.publish(self.cmd_vel)
                 else :
-                    self.cmd_vel.linear.x = 0.03
-                rospy.loginfo('forward')
-
-            detect_duration = rospy.get_rostime().to_sec() - self.poseArray[boxMarker].header.stamp.to_sec() 
-            rospy.loginfo('detect duration time  %.2f', detect_duration )
-            if detect_duration > 0.5:
-                self.cmd_vel.linear.x  = -0.01
-                rospy.loginfo('back')               
-
-            if distance <= distance_min and ( abs(dircetion - direction_center) < direction_range ) and detect_duration < 0.5:
-                self.cmd_vel.angular.z = 0
-                self.cmd_vel.linear.x  = 0.02
-                self.cmd_vel_pub.publish(self.cmd_vel) 
-                rospy.sleep(5) 
-                self.cmd_vel.angular.z = 0
-                self.cmd_vel.linear.x  = 0
-                self.cmd_vel_pub.publish(self.cmd_vel) 
-                break
-            self.cmd_vel_pub.publish(self.cmd_vel)   
-        self.curState = State.PLACE_OBJECT            
+                    rospy.loginfo('turn stop')
+                    self.cmd_vel.linear.x = 0 
+                    self.cmd_vel.angular.z = 0.0
+                    self.cmd_vel_pub.publish(self.cmd_vel)
+                    self.curState = State.PLACE_OBJECT 
+                    break                
+            else :                        
+                if armarker_enable :                
+                    if self.obstacle_ahead_distance > 0.3 :
+                        self.cmd_vel.linear.x = 0.1     
+                    else :
+                        self.cmd_vel.linear.x = 0.03 
+                    if dircetion > (direction_center + direction_range) :
+                        rospy.loginfo('turn letf2 %.2f', self.cmd_vel.linear.x)                         
+                        self.cmd_vel.angular.z = 0.05                        
+                    elif dircetion < (direction_center - direction_range) :
+                        rospy.loginfo('turn right2')
+                        self.cmd_vel.angular.z = -0.05
+                    else :
+                        rospy.loginfo('forward2 %.2f', self.cmd_vel.linear.x)
+                        self.cmd_vel.angular.z = 0    
+                    self.cmd_vel_pub.publish(self.cmd_vel)        
+                else :
+                    rospy.loginfo('forward2')
+                    self.cmd_vel.linear.x = 0.03 
+                    self.cmd_vel.angular.z = 0.0
+                    self.cmd_vel_pub.publish(self.cmd_vel)
+                    break          
 
     def placeObject(self):   
         rospy.loginfo('pickObject')
@@ -441,7 +469,7 @@ class CoreNodeController():
         self.setArmKinematics(object_pose)
         rospy.sleep(3.5)        
 
-        object_pose.position.x  = 0.19
+        object_pose.position.x  = 0.18
         object_pose.position.y  = 0.0
         object_pose.position.z  = 0.3
         object_pose.orientation.w = 1

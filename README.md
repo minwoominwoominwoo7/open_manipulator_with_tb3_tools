@@ -1,5 +1,5 @@
 ## 모델 셋팅 
-eb 로 .bashrc 파일을 아래처럼 모델 설정 ,waffle 로 샛팅 
+eb 로 .bashrc 파일을 아래처럼 모델 설정 ,waffle 로 샛팅    
 #export TURTLEBOT3_MODEL=burger  
 export TURTLEBOT3_MODEL=waffle   
 #export TURTLEBOT3_MODEL=waffle_pi    

@@ -25,7 +25,7 @@ import subprocess
 import os
 import sys
 from enum import Enum
-from std_msgs.msg import UInt8
+from std_msgs.msg import UInt8, Bool
 
 from math import pow, atan2, sqrt
 from tf.transformations import *
@@ -63,10 +63,11 @@ class State(enum.Enum):
     SELECT_MARKER = 2     
     GO_OBJECT = 3
     CLOSE_OBJECT = 4
-    PICK_OBJECT = 5
-    GO_BOX = 6
-    CLOSE_BOX = 7
-    PLACE_OBJECT = 8    
+    ALINE_OBJECT = 5   
+    PICK_OBJECT = 6
+    GO_BOX = 7
+    CLOSE_BOX = 8
+    PLACE_OBJECT = 9    
     FINISH = 10
     END = 11
   
@@ -83,15 +84,20 @@ class CoreNodeController():
         self.set_joint_position_by_moveit = rospy.ServiceProxy(self.planning_group + '/moveit/set_joint_position', SetJointPosition)
         self.set_kinematics_by_moveit = rospy.ServiceProxy(self.planning_group + '/moveit/set_kinematics_pose', SetKinematicsPose)
         self.set_gripper_control = rospy.ServiceProxy(self.namespace + '/gripper', SetJointPosition)
+
+        self.pub_use_pcl = rospy.Publisher('/use_pcl', Bool, queue_size=1)
+
         self.gofinish = False;
 
         self.odom_sub = rospy.Subscriber(self.namespace + '/odom', Odometry, self.odomMsgCallback)
         self.sub_scan = rospy.Subscriber(self.namespace + '/scan', LaserScan, self.scanMsgCallback)
+        self.sub_pcl_object = rospy.Subscriber('/pcl_object_position', PoseStamped, self.pclObjectMsgCallback)
         self.cmd_vel_pub = rospy.Publisher(self.namespace + '/cmd_vel', Twist, queue_size=10)
         self.tb3_odom = Odometry()
         self.obstacle_ahead_distance = 0.1
         self.cmd_vel = Twist()   
         self.listener = tf.TransformListener()
+        self.pcl_object_position = PoseStamped()
 
         #self.set_kinematics_position_by_moveit = rospy.ServiceProxy('/open_manipulator/goal_task_space_path_position_only', SetKinematicsPose)
         self.poseArray  = [PoseStamped() for i in range(10)]
@@ -102,21 +108,28 @@ class CoreNodeController():
         self.curMarkerNum = 0
 
         self.curState= State.START;  
-        #self.curState= State.GO_BOX
+        #self.curState= State.PLACE_OBJECT
         self.is_triggered = False
         #self.is_triggered = True
         #self.finishMarkerNum.append(0)
         #self.finishMarkerNum.append(1)
         #self.finishMarkerNum.append(2)
         #self.finishMarkerNum.append(3)
+        rospy.sleep(1) 
+        
+        self.init_joint = JointPosition()
+        self.init_joint.position = [0.0, -1.5707, 1.37, 0.0]
+        self.setArmJoint(self.init_joint)   
+        rospy.sleep(3) 
 
-        rospy.sleep(3)
         loop_rate = rospy.Rate(10) # 10hz
         while not rospy.is_shutdown():
             if self.is_triggered == True:
                 self.fnControlNode()            
             loop_rate.sleep()
 
+    def pclObjectMsgCallback(self, msg):     
+        self.pcl_object_position = msg
 
     def odomMsgCallback(self, odom_msg):       
         self.tb3_odom = odom_msg  
@@ -134,7 +147,9 @@ class CoreNodeController():
         elif self.curState== State.GO_OBJECT :
             self.goObject()  
         elif self.curState== State.CLOSE_OBJECT :
-            self.closeObject()        
+            self.closeObject()
+        elif self.curState== State.ALINE_OBJECT :
+            self.alineObject()                   
         elif self.curState== State.PICK_OBJECT :
             self.pickObject() 
         elif self.curState== State.GO_BOX :
@@ -144,7 +159,7 @@ class CoreNodeController():
         elif self.curState== State.PLACE_OBJECT :
             self.placeObject()  
         elif self.curState== State.FINISH :
-            self.finish()         
+            self.finish()            
 
     def end(self):
         pass
@@ -271,7 +286,7 @@ class CoreNodeController():
                     self.cmd_vel.linear.x = 0 
                     self.cmd_vel.angular.z = 0.0
                     self.cmd_vel_pub.publish(self.cmd_vel)
-                    self.curState = State.PICK_OBJECT 
+                    self.curState = State.ALINE_OBJECT 
                     break                
             else :                        
                 if armarker_enable :   
@@ -294,7 +309,50 @@ class CoreNodeController():
                     self.cmd_vel.linear.x = 0.01  
                     self.cmd_vel.angular.z = 0.0
                     self.cmd_vel_pub.publish(self.cmd_vel)
-                    break        
+                    break   
+  
+    def alineObject(self):  
+        self.curState = State.PICK_OBJECT 
+        return     
+        msg1 = Bool()
+        msg1.data = True
+        #self.setArmJoint(self.init_joint)   
+        #rospy.sleep(3)
+        #go_backward_location
+        init2_joint = JointPosition()
+        init2_joint.position = [0, -1.551, -0.234, 1.98]
+        self.setArmJoint(init2_joint)   
+        rospy.sleep(3)         
+
+        self.pub_use_pcl.publish(msg1.data ) 
+        if  (rospy.get_rostime().to_sec() - self.pcl_object_position.header.stamp.to_sec()) > 0.5 :
+            rospy.loginfo('There is no pcl object')
+            return        
+        rospy.loginfo('alineObject %.3f , %.3f ,%.3f ',self.pcl_object_position.pose.position.x, \
+                       self.pcl_object_position.pose.position.y, self.pcl_object_position.pose.position.z )
+        dircetion = self.pcl_object_position.pose.position.x
+        direction_center = -0.039
+        direction_range = 0.001
+        if dircetion > (direction_center + direction_range) :
+            rospy.loginfo('turn right')
+            self.cmd_vel.linear.x = 0 
+            self.cmd_vel.angular.z = -0.05
+            self.cmd_vel_pub.publish(self.cmd_vel)            
+        elif dircetion < (direction_center - direction_range) :
+            rospy.loginfo('turn letf')
+            self.cmd_vel.linear.x = 0 
+            self.cmd_vel.angular.z = 0.05
+            self.cmd_vel_pub.publish(self.cmd_vel)
+        else :
+            rospy.loginfo('aline finish')
+            self.cmd_vel.linear.x = 0 
+            self.cmd_vel.angular.z = 0.0
+            self.cmd_vel_pub.publish(self.cmd_vel)
+            rospy.sleep(0.1)  
+            self.cmd_vel_pub.publish(self.cmd_vel)
+            rospy.sleep(0.1)  
+            self.cmd_vel_pub.publish(self.cmd_vel)  
+            self.curState = State.PICK_OBJECT 
 
     def pickObject(self):   
         rospy.loginfo('pickObject')
@@ -303,7 +361,7 @@ class CoreNodeController():
         self.openGripper()
         rospy.sleep(1)      
         #close object
-        object_pose.position.x  = 0.18
+        object_pose.position.x  = 0.19
         object_pose.position.y  = 0.0
         object_pose.position.z  = 0.25
         object_pose.orientation.w = 1
@@ -320,7 +378,7 @@ class CoreNodeController():
         joint.position = [0.0, -1.5707, 1.37, -0.20]
         self.setArmJoint(joint)
         rospy.sleep(3) 
-        self.curState = State.GO_BOX    
+        self.curState = State.GO_BOX                
 
     def openGripper(self):
         rospy.logwarn("openGripper")
@@ -338,7 +396,7 @@ class CoreNodeController():
     def closeGripper(self):
         rospy.logwarn("openGripper")
         joint = JointPosition()
-        joint.position = [0]
+        joint.position = [-0.1]
         joint.max_velocity_scaling_factor = 1.0
         joint.max_accelerations_scaling_factor = 1.0
         path_time = 1
@@ -381,6 +439,7 @@ class CoreNodeController():
         goalPoseStamped.pose.orientation.z = q_new[3]
         self.fnPubGoalPose(goalPoseStamped)
         self.curState = State.CLOSE_BOX
+        
 
     def closeBox(self):
         rospy.loginfo('closeBox %d ',self.curMarkerNum)
@@ -446,46 +505,22 @@ class CoreNodeController():
                     break          
 
     def placeObject(self):   
-        rospy.loginfo('pickObject')
-        object_pose = Pose()
-        #go object
-        '''object_pose.position.x  = 0.15
-        object_pose.position.y  = 0.0
-        object_pose.position.z  = 0.22
-        object_pose.orientation.w = 1
-        object_pose.orientation.x = 0.0
-        object_pose.orientation.y = 0.0
-        object_pose.orientation.z = 0.0
-        self.setArmKinematics(object_pose)
-        rospy.sleep(3)'''
-        #close box
-        object_pose.position.x  = 0.10
-        object_pose.position.y  = 0.0
-        object_pose.position.z  = 0.3
-        object_pose.orientation.w = 1
-        object_pose.orientation.x = 0.0
-        object_pose.orientation.y = 0.0
-        object_pose.orientation.z = 0.0
-        self.setArmKinematics(object_pose)
-        rospy.sleep(3.5)        
+        rospy.loginfo('placeObject')
 
-        object_pose.position.x  = 0.18
-        object_pose.position.y  = 0.0
-        object_pose.position.z  = 0.3
-        object_pose.orientation.w = 1
-        object_pose.orientation.x = 0.0
-        object_pose.orientation.y = 0.0
-        object_pose.orientation.z = 0.0
-        self.setArmKinematics(object_pose)
-        rospy.sleep(3.5)    
+        tmp_joint = JointPosition()
+        tmp_joint.position = [0.0, -0.8145, 0.756, 0.071]
+        self.setArmJoint(tmp_joint)   
+        rospy.sleep(2)        
 
-        #gripper close 
+        tmp_joint.position = [0.0, -0.07, 0.23, -0.167]
+        self.setArmJoint(tmp_joint)   
+        rospy.sleep(2)    
+
+        #gripper open
         self.openGripper()
         rospy.sleep(1) 
         #close robot
-        joint = JointPosition()
-        joint.position = [0.0, -1.5707, 1.37, -0.20]
-        self.setArmJoint(joint)
+        self.setArmJoint(self.init_joint)   
         rospy.sleep(3) 
         self.curState = State.FINISH
         self.gofinish = False

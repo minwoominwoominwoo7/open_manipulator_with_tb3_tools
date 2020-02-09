@@ -1,0 +1,3 @@
+<launch>
+    <node name="open_manipulator_with_tb3_segmentation" pkg="open_manipulator_with_tb3_tools" type="open_manipulator_with_tb3_segmentation" output="screen" />
+</launch>

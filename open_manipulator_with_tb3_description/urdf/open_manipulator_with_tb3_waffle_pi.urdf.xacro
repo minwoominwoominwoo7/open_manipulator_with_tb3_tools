@@ -24,7 +24,8 @@
 
   <!-- Base fixed joint -->
   <joint name="base_fixed" type="fixed">
-    <origin xyz="-0.092 0.0 0.091" rpy="0 0 0"/>
+    <!--<origin xyz="-0.092 0.0 0.091" rpy="0 0 0"/>-->
+    <origin xyz="-0.092 0.0 0.106" rpy="0 0 0"/>    
     <parent link="base_link"/>
     <child link="link1"/>
   </joint>
@@ -363,6 +364,73 @@
       <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001" />
     </inertial>
   </link>
+
+
+  <joint name="camera2_joint" type="fixed">
+    <!--<origin xyz="0.064 -0.065 0.094" rpy="0 0 0"/>-->
+    <origin xyz="0.05 -0.065 0.043" rpy="0 0 0"/>
+    <!--<<origin xyz="0.05 0.03 0.043" rpy="0 0 0"/>-->
+    <parent link="link5"/>
+    <child link="camera2_link"/>
+  </joint>
+
+  <link name="camera2_link">
+    <visual>
+     <origin xyz="0 0 0" rpy="1.57 0 1.57"/>
+      <geometry>
+       <mesh filename="package://turtlebot3_description/meshes/sensors/r200.dae" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.003 0.065 0.007" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.012 0.132 0.020"/>
+      </geometry>
+    </collision>
+
+    <!-- This inertial field needs doesn't contain reliable data!! -->
+<!--   <inertial>
+      <mass value="0.564" />
+      <origin xyz="0 0 0" />
+      <inertia ixx="0.003881243" ixy="0.0" ixz="0.0"
+               iyy="0.000498940" iyz="0.0"
+               izz="0.003879257" />
+    </inertial>-->
+  </link>
+
+
+  <xacro:property name="r200_cam2_rgb_px" value="0.005"/>
+  <xacro:property name="r200_cam2_rgb_py" value="0.018"/>
+  <xacro:property name="r200_cam2_rgb_pz" value="0.013"/>
+  <xacro:property name="r200_cam2_depth_offset" value="0.01"/>
+
+  <joint name="camera2_rgb_joint" type="fixed">
+    <origin xyz="${r200_cam2_rgb_px} ${r200_cam2_rgb_py} ${r200_cam2_rgb_pz}" rpy="0 0 0"/>
+    <parent link="camera2_link"/>
+    <child link="camera2_rgb_frame"/>
+  </joint>
+  <link name="camera2_rgb_frame"/>
+
+  <joint name="camera2_rgb_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.57 0 -1.57"/>
+    <parent link="camera2_rgb_frame"/>
+    <child link="camera2_rgb_optical_frame"/>
+  </joint>
+  <link name="camera2_rgb_optical_frame"/>
+
+  <joint name="camera2_depth_joint" type="fixed">
+    <origin xyz="${r200_cam2_rgb_px} ${r200_cam2_rgb_py + r200_cam2_depth_offset} ${r200_cam2_rgb_pz}" rpy="0 0 0"/>
+    <parent link="camera2_link"/>
+    <child link="camera2_depth_frame"/>
+  </joint>
+  <link name="camera2_depth_frame"/>
+
+  <joint name="camera2_depth_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="-1.57 0 -1.57"/>
+    <parent link="camera2_depth_frame"/>
+    <child link="camera2_depth_optical_frame"/>
+  </joint>
+  <link name="camera2_depth_optical_frame"/>
 
 </robot>
 

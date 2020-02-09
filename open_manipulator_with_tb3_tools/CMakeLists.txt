@@ -24,6 +24,9 @@ find_package(catkin REQUIRED COMPONENTS
   moveit_ros_planning_interface
   smach
   smach_ros
+  pcl_conversions
+  pcl_ros
+  sensor_msgs
 )
 
 ################################################################################
@@ -66,6 +69,10 @@ target_link_libraries(open_manipulator_with_tb3_gazebo_bridge ${catkin_LIBRARIES
 add_executable(open_manipulator_with_tb3_gripper_server src/gripper_server.cpp)
 add_dependencies(open_manipulator_with_tb3_gripper_server ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(open_manipulator_with_tb3_gripper_server ${catkin_LIBRARIES})
+
+add_executable(open_manipulator_with_tb3_segmentation src/segmentation.cpp)
+add_dependencies(open_manipulator_with_tb3_segmentation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(open_manipulator_with_tb3_segmentation ${catkin_LIBRARIES})
 
 ################################################################################
 # Install
